@@ -1,0 +1,113 @@
+name: Build & Release Goldleaf
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_suffix:
+        description: 'Release suffix (e.g. -beta / -rc1, leave empty for stable)'
+        required: false
+        default: ''
+      release_title_prefix:
+        description: 'Release title prefix (optional)'
+        required: false
+        default: 'Goldleaf '
+
+jobs:
+  Goldleaf:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Initialize environment and install dependencies
+      run: |
+        sudo -n apt-get update
+        sudo -n apt-get upgrade -y patch autoconf automake diffutils pkgconf fakeroot git file tar bzip2 zstd python3 python3-venv python3-full libcurl4-openssl-dev libmbedtls-dev libsdl2-dev libsdl2-mixer-dev libsdl2-ttf-dev libsdl2-image-dev libfreetype6-dev libpng-dev libjpeg-dev libwebp-dev libbz2-dev libharfbuzz-dev
+        sudo -n dkp-pacman --noconfirm -U \
+          "https://wii.leseratte10.de/devkitPro/other-stuff/dkp-toolchain-vars-1.0.2-1-any.pkg.tar.xz"
+        echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
+        echo "DEVKITA64=/opt/devkitpro/devkitA64" >> $GITHUB_ENV
+        echo "PATH=$PATH:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin" >> $GITHUB_ENV
+    - name: Fix git safe directory warnings
+      run: git config --system --add safe.directory '*'
+
+    - name: Checkout latest libnx commit
+      run: |
+        git clone --recurse-submodules https://github.com/switchbrew/libnx.git
+    - name: Build and install libnx
+      run: |
+        cd libnx
+        export DEVKITPRO=/opt/devkitpro
+        export DEVKITA64=/opt/devkitpro/devkitA64
+        export PATH=$PATH:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin
+        make install -j$(nproc)
+    - name: Extract version and generate build time
+      id: extract_info
+      run: |
+        VER_MAJOR=$(grep -E '^VER_MAJOR\s*:=' Goldleaf/Makefile | awk -F'=' '{gsub(/ /,""); print $2}')
+        VER_MINOR=$(grep -E '^VER_MINOR\s*:=' Goldleaf/Makefile | awk -F'=' '{gsub(/ /,""); print $2}')
+        VER_MICRO=$(grep -E '^VER_MICRO\s*:=' Goldleaf/Makefile | awk -F'=' '{gsub(/ /,""); print $2}')
+        FULL_VERSION="${VER_MAJOR}.${VER_MINOR}.${VER_MICRO}${{ github.event.inputs.release_suffix }}"
+        BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        echo "GOLDLEAF_VERSION=$FULL_VERSION" >> $GITHUB_ENV
+        echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
+        echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+    - name: Create Python virtual environment
+      run: |
+        python3 -m venv $GITHUB_WORKSPACE/venv
+        . $GITHUB_WORKSPACE/venv/bin/activate
+        pip install --upgrade pip requests
+        echo "VENV_PATH=$GITHUB_WORKSPACE/venv" >> $GITHUB_ENV
+    - name: Set workspace permissions
+      run: |
+        sudo chmod -R 777 /opt/devkitpro
+        chmod -R 777 $GITHUB_WORKSPACE
+    - name: Run project setup
+      run: |
+        . $VENV_PATH/bin/activate
+        export DEVKITPRO=/opt/devkitpro
+        export DEVKITA64=/opt/devkitpro/devkitA64
+        export PATH=$PATH:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin
+        make setup -j$(nproc)
+    - name: Generate arc resources
+      run: |
+        . $VENV_PATH/bin/activate
+        make arc -j$(nproc)
+    - name: Build Goldleaf
+      run: |
+        export DEVKITPRO=/opt/devkitpro
+        export DEVKITA64=/opt/devkitpro/devkitA64
+        export PATH=$PATH:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin
+        . $VENV_PATH/bin/activate
+        make build -j$(nproc)
+        if [ ! -f "Goldleaf/Goldleaf.nro" ]; then
+          echo "Goldleaf.nro not found!"
+          ls -la Goldleaf/
+          exit 1
+        fi
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Goldleaf-${{ steps.extract_info.outputs.full_version }}
+        path: Goldleaf/Goldleaf.nro
+        if-no-files-found: error
+
+    - name: Release to GitHub
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.extract_info.outputs.full_version }}
+        name: ${{ github.event.inputs.release_title_prefix }}${{ steps.extract_info.outputs.full_version }}
+        body: |
+          ## Goldleaf Auto Build
+          - Version: ${{ env.GOLDLEAF_VERSION }}
+          - Build Time: ${{ steps.extract_info.outputs.build_time }}
+          - Commit: ${{ github.sha }}
+          - Env: devkitpro/devkita64 (Ubuntu)
+        prerelease: ${{ github.event.inputs.release_suffix != '' }}
+        draft: false
+        files: Goldleaf/Goldleaf.nro
