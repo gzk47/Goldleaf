@@ -64,6 +64,8 @@ namespace {
         { Language::Taiwanese, { "zh-TW" } },
         { Language::Russian, { "ru" } },
         { Language::Korean, { "ko" } },
+        { Language::Polish, { "pl" } },
+        { Language::Thai, { "th" } },
 
         { Language::Auto, { "auto" } }
     };
@@ -81,6 +83,8 @@ namespace {
         { Language::ChineseSimplified, { SetLanguage_ZHHANS } },
         { Language::ChineseTraditional, { SetLanguage_ZHHANT } },
         { Language::Korean, { SetLanguage_KO } },
+        { Language::Polish, { SetLanguage_PL } },
+        { Language::Thai, { SetLanguage_TH } },
     };
 
     Lock g_ThreadNameLock;
@@ -302,6 +306,7 @@ void Finalize() {
         for(auto &it : g_ThreadLogBufferList) {
             delete[] it.second;
         }
+        g_ThreadLogBufferList.clear();
     }
 }
 
